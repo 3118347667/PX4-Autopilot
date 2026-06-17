@@ -335,6 +335,8 @@ void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_ve
 	_chirp_sweep_time += dt;
 	vehicle_torque_setpoint.xyz[axis] += _chirp_sweep_signal;
 
+	_esc_status_sub.update(&_esc_status);
+
 	rate_chirp_sweep_s rate_chirp_sweep{};
 	rate_chirp_sweep.timestamp_sample = angular_velocity.timestamp_sample;
 	rate_chirp_sweep.timestamp = hrt_absolute_time();
@@ -342,6 +344,13 @@ void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_ve
 	rate_chirp_sweep.r = _rates_setpoint(axis);
 	rate_chirp_sweep.u = vehicle_torque_setpoint.xyz[axis];
 	rate_chirp_sweep.y = angular_accel(axis);
+	rate_chirp_sweep.esc_timestamp = _esc_status.timestamp;
+	rate_chirp_sweep.esc_count = math::min(_esc_status.esc_count, esc_status_s::CONNECTED_ESC_MAX);
+	rate_chirp_sweep.esc_online_flags = _esc_status.esc_online_flags;
+
+	for (uint8_t i = 0; i < rate_chirp_sweep.esc_count; i++) {
+		rate_chirp_sweep.esc_rpm[i] = _esc_status.esc[i].esc_rpm;
+	}
 
 	_rate_chirp_sweep_pub.publish(rate_chirp_sweep);
 }

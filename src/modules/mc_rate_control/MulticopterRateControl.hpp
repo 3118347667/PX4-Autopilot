@@ -50,6 +50,7 @@
 #include <uORB/topics/actuator_controls_status.h>
 #include <uORB/topics/battery_status.h>
 #include <uORB/topics/control_allocator_status.h>
+#include <uORB/topics/esc_status.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/rate_chirp_sweep.h>
@@ -104,6 +105,7 @@ private:
 
 	uORB::Subscription _battery_status_sub{ORB_ID(battery_status)};
 	uORB::Subscription _control_allocator_status_sub{ORB_ID(control_allocator_status)};
+	uORB::Subscription _esc_status_sub{ORB_ID(esc_status)};
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
@@ -122,6 +124,7 @@ private:
 	uORB::Publication<rate_chirp_sweep_s>		_rate_chirp_sweep_pub{ORB_ID(rate_chirp_sweep)};
 
 	vehicle_control_mode_s	_vehicle_control_mode{};
+	esc_status_s		_esc_status{};
 	vehicle_status_s	_vehicle_status{};
 
 	bool _landed{true};
