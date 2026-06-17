@@ -294,6 +294,73 @@ PARAM_DEFINE_FLOAT(MC_YAWRATE_K, 1.0f);
 PARAM_DEFINE_INT32(MC_BAT_SCALE_EN, 0);
 
 /**
+ * Rate chirp sweep injection channel
+ *
+ * Enables chirp signal injection and selects the normalized torque setpoint axis.
+ * The sweep starts when AUX1 is greater than 0.5 and resets after disarming.
+ *
+ * @value 0 Disabled
+ * @value 1 Roll
+ * @value 2 Pitch
+ * @value 3 Yaw
+ * @min 0
+ * @max 3
+ * @group Multicopter Rate Control
+ */
+PARAM_DEFINE_INT32(MC_CHIRP_EN, 0);
+
+/**
+ * Rate chirp sweep start frequency
+ *
+ * Start frequency of the linear chirp injected for frequency-domain system identification.
+ *
+ * @min 0.01
+ * @max 500.0
+ * @unit Hz
+ * @decimal 2
+ * @group Multicopter Rate Control
+ */
+PARAM_DEFINE_FLOAT(MC_CHIRP_FSTART, 0.50f);
+
+/**
+ * Rate chirp sweep end frequency
+ *
+ * End frequency of the linear chirp injected for frequency-domain system identification.
+ *
+ * @min 0.01
+ * @max 1000.0
+ * @unit Hz
+ * @decimal 2
+ * @group Multicopter Rate Control
+ */
+PARAM_DEFINE_FLOAT(MC_CHIRP_FEND, 50.0f);
+
+/**
+ * Rate chirp sweep duration
+ *
+ * Duration of the linear chirp injected for frequency-domain system identification.
+ *
+ * @min 5.0
+ * @max 1000.0
+ * @unit s
+ * @decimal 2
+ * @group Multicopter Rate Control
+ */
+PARAM_DEFINE_FLOAT(MC_CHIRP_TIME, 60.0f);
+
+/**
+ * Rate chirp sweep magnitude
+ *
+ * Amplitude of the chirp added to the normalized torque setpoint.
+ *
+ * @min 0.001
+ * @max 100.0
+ * @decimal 3
+ * @group Multicopter Rate Control
+ */
+PARAM_DEFINE_FLOAT(MC_CHIRP_MAG, 0.010f);
+
+/**
  * Low pass filter cutoff frequency for yaw torque setpoint
  *
  * Reduces vibrations by lowering high frequency torque caused by rotor acceleration.

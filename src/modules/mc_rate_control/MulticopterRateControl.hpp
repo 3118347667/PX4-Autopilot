@@ -52,6 +52,7 @@
 #include <uORB/topics/control_allocator_status.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/rate_chirp_sweep.h>
 #include <uORB/topics/rate_ctrl_status.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_control_mode.h>
@@ -89,6 +90,15 @@ private:
 	void parameters_updated();
 
 	void updateActuatorControlsStatus(const vehicle_torque_setpoint_s &vehicle_torque_setpoint, float dt);
+	void resetChirpSweep();
+	void updateChirpSweep(float dt, const vehicle_angular_velocity_s &angular_velocity,
+			      const matrix::Vector3f &angular_accel, vehicle_torque_setpoint_s &vehicle_torque_setpoint);
+
+	enum class RateChirpChannel : int32_t {
+		roll = 1,
+		pitch = 2,
+		yaw = 3,
+	};
 
 	RateControl _rate_control; ///< class for rate control calculations
 
@@ -109,6 +119,7 @@ private:
 	uORB::Publication<vehicle_rates_setpoint_s>	_vehicle_rates_setpoint_pub{ORB_ID(vehicle_rates_setpoint)};
 	uORB::Publication<vehicle_torque_setpoint_s>	_vehicle_torque_setpoint_pub;
 	uORB::Publication<vehicle_thrust_setpoint_s>	_vehicle_thrust_setpoint_pub;
+	uORB::Publication<rate_chirp_sweep_s>		_rate_chirp_sweep_pub{ORB_ID(rate_chirp_sweep)};
 
 	vehicle_control_mode_s	_vehicle_control_mode{};
 	vehicle_status_s	_vehicle_status{};
@@ -131,6 +142,11 @@ private:
 	float _control_energy[4] {};
 
 	AlphaFilter<float> _output_lpf_yaw;
+
+	float _chirp_sweep_time{0.f};
+	float _chirp_sweep_signal{0.f};
+	bool _chirp_sweep_started{false};
+	bool _chirp_sweep_finished{false};
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::MC_ROLLRATE_P>) _param_mc_rollrate_p,
@@ -162,6 +178,12 @@ private:
 		(ParamFloat<px4::params::MC_ACRO_EXPO_Y>) _param_mc_acro_expo_y,				/**< expo stick curve shape (yaw) */
 		(ParamFloat<px4::params::MC_ACRO_SUPEXPO>) _param_mc_acro_supexpo,		/**< superexpo stick curve shape (roll & pitch) */
 		(ParamFloat<px4::params::MC_ACRO_SUPEXPOY>) _param_mc_acro_supexpoy,		/**< superexpo stick curve shape (yaw) */
+
+		(ParamInt<px4::params::MC_CHIRP_EN>) _param_mc_chirp_en,
+		(ParamFloat<px4::params::MC_CHIRP_FSTART>) _param_mc_chirp_f0,
+		(ParamFloat<px4::params::MC_CHIRP_FEND>) _param_mc_chirp_f1,
+		(ParamFloat<px4::params::MC_CHIRP_TIME>) _param_mc_chirp_time,
+		(ParamFloat<px4::params::MC_CHIRP_MAG>) _param_mc_chirp_mag,
 
 		(ParamBool<px4::params::MC_BAT_SCALE_EN>) _param_mc_bat_scale_en
 	)

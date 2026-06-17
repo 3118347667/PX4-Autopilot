@@ -37,6 +37,7 @@
 #include <circuit_breaker/circuit_breaker.h>
 #include <mathlib/math/Limits.hpp>
 #include <mathlib/math/Functions.hpp>
+#include <lib/system_identification/signal_generator.hpp>
 #include <px4_platform_common/events.h>
 
 using namespace matrix;
@@ -191,6 +192,7 @@ MulticopterRateControl::Run()
 			// reset integral if disarmed
 			if (!_vehicle_control_mode.flag_armed || _vehicle_status.vehicle_type != vehicle_status_s::VEHICLE_TYPE_ROTARY_WING) {
 				_rate_control.resetIntegral();
+				resetChirpSweep();
 			}
 
 			// update saturation status from control allocation feedback
@@ -237,6 +239,8 @@ MulticopterRateControl::Run()
 			vehicle_torque_setpoint.xyz[1] = PX4_ISFINITE(torque_setpoint(1)) ? torque_setpoint(1) : 0.f;
 			vehicle_torque_setpoint.xyz[2] = PX4_ISFINITE(torque_setpoint(2)) ? torque_setpoint(2) : 0.f;
 
+			updateChirpSweep(dt, angular_velocity, angular_accel, vehicle_torque_setpoint);
+
 			// scale setpoints by battery status if enabled
 			if (_param_mc_bat_scale_en.get()) {
 				if (_battery_status_sub.updated()) {
@@ -269,6 +273,77 @@ MulticopterRateControl::Run()
 	}
 
 	perf_end(_loop_perf);
+}
+
+void MulticopterRateControl::resetChirpSweep()
+{
+	_chirp_sweep_time = 0.f;
+	_chirp_sweep_signal = 0.f;
+	_chirp_sweep_started = false;
+	_chirp_sweep_finished = false;
+}
+
+void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_velocity_s &angular_velocity,
+		const Vector3f &angular_accel, vehicle_torque_setpoint_s &vehicle_torque_setpoint)
+{
+	const int32_t chirp_channel = _param_mc_chirp_en.get();
+
+	if (chirp_channel <= 0) {
+		return;
+	}
+
+	manual_control_setpoint_s manual_control_setpoint{};
+
+	if (_manual_control_setpoint_sub.copy(&manual_control_setpoint)
+	    && manual_control_setpoint.aux1 > 0.5f && !_chirp_sweep_started) {
+		_chirp_sweep_started = true;
+	}
+
+	if (!_chirp_sweep_started || _chirp_sweep_finished) {
+		return;
+	}
+
+	const float duration = _param_mc_chirp_time.get();
+
+	if (_chirp_sweep_time >= duration) {
+		_chirp_sweep_finished = true;
+		return;
+	}
+
+	int axis = -1;
+
+	switch (static_cast<RateChirpChannel>(chirp_channel)) {
+	case RateChirpChannel::roll:
+		axis = 0;
+		break;
+
+	case RateChirpChannel::pitch:
+		axis = 1;
+		break;
+
+	case RateChirpChannel::yaw:
+		axis = 2;
+		break;
+	}
+
+	if (axis < 0) {
+		return;
+	}
+
+	_chirp_sweep_signal = _param_mc_chirp_mag.get() * signal_generator::getLinearSineSweep(_param_mc_chirp_f0.get(),
+			      _param_mc_chirp_f1.get(), duration, _chirp_sweep_time);
+	_chirp_sweep_time += dt;
+	vehicle_torque_setpoint.xyz[axis] += _chirp_sweep_signal;
+
+	rate_chirp_sweep_s rate_chirp_sweep{};
+	rate_chirp_sweep.timestamp_sample = angular_velocity.timestamp_sample;
+	rate_chirp_sweep.timestamp = hrt_absolute_time();
+	rate_chirp_sweep.chirp = _chirp_sweep_signal;
+	rate_chirp_sweep.r = _rates_setpoint(axis);
+	rate_chirp_sweep.u = vehicle_torque_setpoint.xyz[axis];
+	rate_chirp_sweep.y = angular_accel(axis);
+
+	_rate_chirp_sweep_pub.publish(rate_chirp_sweep);
 }
 
 void MulticopterRateControl::updateActuatorControlsStatus(const vehicle_torque_setpoint_s &vehicle_torque_setpoint,
