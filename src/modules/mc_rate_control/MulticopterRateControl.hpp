@@ -150,6 +150,7 @@ private:
 	float _chirp_sweep_signal{0.f};
 	bool _chirp_sweep_started{false};
 	bool _chirp_sweep_finished{false};
+	int32_t _rate_chirp_esc_rpm_last[rate_chirp_sweep_s::ESC_RPM_MAX] {};
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::MC_ROLLRATE_P>) _param_mc_rollrate_p,

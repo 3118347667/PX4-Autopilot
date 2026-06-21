@@ -281,6 +281,10 @@ void MulticopterRateControl::resetChirpSweep()
 	_chirp_sweep_signal = 0.f;
 	_chirp_sweep_started = false;
 	_chirp_sweep_finished = false;
+
+	for (int32_t &esc_rpm : _rate_chirp_esc_rpm_last) {
+		esc_rpm = 0;
+	}
 }
 
 void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_velocity_s &angular_velocity,
@@ -349,7 +353,13 @@ void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_ve
 	rate_chirp_sweep.esc_online_flags = _esc_status.esc_online_flags;
 
 	for (uint8_t i = 0; i < rate_chirp_sweep.esc_count; i++) {
-		rate_chirp_sweep.esc_rpm[i] = _esc_status.esc[i].esc_rpm;
+		const int32_t esc_rpm = _esc_status.esc[i].esc_rpm;
+
+		if (esc_rpm != 0) {
+			_rate_chirp_esc_rpm_last[i] = esc_rpm;
+		}
+
+		rate_chirp_sweep.esc_rpm[i] = _rate_chirp_esc_rpm_last[i];
 	}
 
 	_rate_chirp_sweep_pub.publish(rate_chirp_sweep);
