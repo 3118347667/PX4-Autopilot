@@ -92,6 +92,7 @@ private:
 
 	void updateActuatorControlsStatus(const vehicle_torque_setpoint_s &vehicle_torque_setpoint, float dt);
 	void resetChirpSweep();
+	static bool isRateChirpEscRpmValid(int32_t esc_rpm, int32_t previous_esc_rpm);
 	void updateChirpSweep(float dt, const vehicle_angular_velocity_s &angular_velocity,
 			      const matrix::Vector3f &angular_accel, vehicle_torque_setpoint_s &vehicle_torque_setpoint);
 
@@ -150,6 +151,8 @@ private:
 	float _chirp_sweep_signal{0.f};
 	bool _chirp_sweep_started{false};
 	bool _chirp_sweep_finished{false};
+	static constexpr int32_t RATE_CHIRP_ESC_RPM_MIN_VALID = 1000;
+	static constexpr int32_t RATE_CHIRP_ESC_RPM_MAX_STEP = 10000;
 	int32_t _rate_chirp_esc_rpm_last[rate_chirp_sweep_s::ESC_RPM_MAX] {};
 
 	DEFINE_PARAMETERS(

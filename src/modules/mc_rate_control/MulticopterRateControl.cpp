@@ -287,6 +287,26 @@ void MulticopterRateControl::resetChirpSweep()
 	}
 }
 
+bool MulticopterRateControl::isRateChirpEscRpmValid(int32_t esc_rpm, int32_t previous_esc_rpm)
+{
+	const int32_t esc_rpm_abs = esc_rpm < 0 ? -esc_rpm : esc_rpm;
+
+	if (esc_rpm_abs < RATE_CHIRP_ESC_RPM_MIN_VALID) {
+		return false;
+	}
+
+	if (previous_esc_rpm != 0) {
+		const int32_t esc_rpm_delta = esc_rpm - previous_esc_rpm;
+		const int32_t esc_rpm_delta_abs = esc_rpm_delta < 0 ? -esc_rpm_delta : esc_rpm_delta;
+
+		if (esc_rpm_delta_abs > RATE_CHIRP_ESC_RPM_MAX_STEP) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
 void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_velocity_s &angular_velocity,
 		const Vector3f &angular_accel, vehicle_torque_setpoint_s &vehicle_torque_setpoint)
 {
@@ -355,7 +375,7 @@ void MulticopterRateControl::updateChirpSweep(float dt, const vehicle_angular_ve
 	for (uint8_t i = 0; i < rate_chirp_sweep.esc_count; i++) {
 		const int32_t esc_rpm = _esc_status.esc[i].esc_rpm;
 
-		if (esc_rpm != 0) {
+		if (isRateChirpEscRpmValid(esc_rpm, _rate_chirp_esc_rpm_last[i])) {
 			_rate_chirp_esc_rpm_last[i] = esc_rpm;
 		}
 
