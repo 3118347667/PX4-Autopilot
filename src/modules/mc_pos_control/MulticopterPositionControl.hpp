@@ -58,6 +58,7 @@
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
+#include <uORB/topics/esc_status.h>
 #include <uORB/topics/hover_thrust_estimate.h>
 #include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
@@ -108,6 +109,7 @@ private:
 
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
+	uORB::Subscription _esc_status_sub{ORB_ID(esc_status)};
 	uORB::Subscription _hover_thrust_estimate_sub{ORB_ID(hover_thrust_estimate)};
 	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
@@ -123,6 +125,7 @@ private:
 	trajectory_setpoint_s _setpoint{PositionControl::empty_trajectory_setpoint};
 	trajectory_setpoint_s _last_valid_setpoint{PositionControl::empty_trajectory_setpoint};
 	vehicle_control_mode_s _vehicle_control_mode{};
+	esc_status_s _esc_status{};
 
 	vehicle_constraints_s _vehicle_constraints {
 		.timestamp = 0,
@@ -224,6 +227,9 @@ private:
 	bool _z_chirp_sweep_started{false};
 	bool _z_chirp_sweep_finished{false};
 	bool _z_chirp_aux1_high_last{false};
+	static constexpr int32_t Z_THRUST_CHIRP_ESC_RPM_MIN_VALID = 1000;
+	static constexpr int32_t Z_THRUST_CHIRP_ESC_RPM_MAX_STEP = 10000;
+	int32_t _z_thrust_chirp_esc_rpm_last[thrust_chirp_sweep_s::ESC_RPM_MAX] {};
 
 	hrt_abstime _last_warn{0}; /**< timer when the last warn message was sent out */
 
@@ -255,6 +261,7 @@ private:
 	void parameters_update(bool force);
 
 	void resetZThrustChirpSweep();
+	static bool isZThrustChirpEscRpmValid(int32_t esc_rpm, int32_t previous_esc_rpm);
 	void updateZThrustChirpSweep(float dt, const vehicle_local_position_s &vehicle_local_position,
 				     const vehicle_local_position_setpoint_s &local_pos_sp,
 				     vehicle_attitude_setpoint_s &attitude_setpoint);

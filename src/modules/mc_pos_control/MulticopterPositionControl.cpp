@@ -652,6 +652,30 @@ void MulticopterPositionControl::resetZThrustChirpSweep()
 	} else {
 		_z_chirp_aux1_high_last = false;
 	}
+
+	for (int32_t &esc_rpm : _z_thrust_chirp_esc_rpm_last) {
+		esc_rpm = 0;
+	}
+}
+
+bool MulticopterPositionControl::isZThrustChirpEscRpmValid(int32_t esc_rpm, int32_t previous_esc_rpm)
+{
+	const int32_t esc_rpm_abs = esc_rpm < 0 ? -esc_rpm : esc_rpm;
+
+	if (esc_rpm_abs < Z_THRUST_CHIRP_ESC_RPM_MIN_VALID) {
+		return false;
+	}
+
+	if (previous_esc_rpm != 0) {
+		const int32_t esc_rpm_delta = esc_rpm - previous_esc_rpm;
+		const int32_t esc_rpm_delta_abs = esc_rpm_delta < 0 ? -esc_rpm_delta : esc_rpm_delta;
+
+		if (esc_rpm_delta_abs > Z_THRUST_CHIRP_ESC_RPM_MAX_STEP) {
+			return false;
+		}
+	}
+
+	return true;
 }
 
 void MulticopterPositionControl::updateZThrustChirpSweep(float dt,
@@ -747,6 +771,22 @@ void MulticopterPositionControl::updateZThrustChirpSweep(float dt,
 	thrust_chirp_sweep.r = acc_sp_body_z;
 	thrust_chirp_sweep.u = attitude_setpoint.thrust_body[2];
 	thrust_chirp_sweep.y = measured_acceleration_z;
+
+	_esc_status_sub.update(&_esc_status);
+
+	thrust_chirp_sweep.esc_timestamp = _esc_status.timestamp;
+	thrust_chirp_sweep.esc_count = math::min(_esc_status.esc_count, thrust_chirp_sweep_s::ESC_RPM_MAX);
+	thrust_chirp_sweep.esc_online_flags = _esc_status.esc_online_flags;
+
+	for (uint8_t i = 0; i < thrust_chirp_sweep.esc_count; i++) {
+		const int32_t esc_rpm = _esc_status.esc[i].esc_rpm;
+
+		if (isZThrustChirpEscRpmValid(esc_rpm, _z_thrust_chirp_esc_rpm_last[i])) {
+			_z_thrust_chirp_esc_rpm_last[i] = esc_rpm;
+		}
+
+		thrust_chirp_sweep.esc_rpm[i] = _z_thrust_chirp_esc_rpm_last[i];
+	}
 
 	_thrust_chirp_sweep_pub.publish(thrust_chirp_sweep);
 }
