@@ -75,6 +75,71 @@ PARAM_DEFINE_INT32(MPC_USE_HTE, 1);
 PARAM_DEFINE_FLOAT(MPC_THR_XY_MARG, 0.3f);
 
 /**
+ * Z thrust chirp sweep enable
+ *
+ * Enable chirp sweep injection on the Z-axis thrust setpoint.
+ * The sweep starts on a rising edge of AUX1.
+ *
+ * @value 0 Disabled
+ * @value 1 Enabled
+ * @min 0
+ * @max 1
+ * @group Multicopter Position Control
+ */
+PARAM_DEFINE_INT32(MPC_Z_CHIRP_EN, 0);
+
+/**
+ * Z thrust chirp sweep start frequency
+ *
+ * Start frequency of the linear chirp injected for frequency-domain system identification.
+ *
+ * @min 0.01
+ * @max 500.0
+ * @unit Hz
+ * @decimal 2
+ * @group Multicopter Position Control
+ */
+PARAM_DEFINE_FLOAT(MPC_Z_CHIRP_F0, 0.50f);
+
+/**
+ * Z thrust chirp sweep end frequency
+ *
+ * End frequency of the linear chirp injected for frequency-domain system identification.
+ *
+ * @min 0.01
+ * @max 1000.0
+ * @unit Hz
+ * @decimal 2
+ * @group Multicopter Position Control
+ */
+PARAM_DEFINE_FLOAT(MPC_Z_CHIRP_F1, 5.00f);
+
+/**
+ * Z thrust chirp sweep duration
+ *
+ * Duration of the linear chirp injected for frequency-domain system identification.
+ *
+ * @min 5.0
+ * @max 1000.0
+ * @unit s
+ * @decimal 2
+ * @group Multicopter Position Control
+ */
+PARAM_DEFINE_FLOAT(MPC_Z_CHIRP_T, 60.0f);
+
+/**
+ * Z thrust chirp sweep magnitude
+ *
+ * Amplitude of the chirp added to the normalized Z-axis thrust setpoint.
+ *
+ * @min 0.001
+ * @max 1.0
+ * @decimal 3
+ * @group Multicopter Position Control
+ */
+PARAM_DEFINE_FLOAT(MPC_Z_CHIRP_MAG, 0.010f);
+
+/**
  * Velocity low pass cutoff frequency
  *
  * A value of 0 disables the filter.

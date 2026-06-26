@@ -34,8 +34,10 @@
 #include "MulticopterPositionControl.hpp"
 
 #include <float.h>
+#include <geo/geo.h>
 #include <lib/mathlib/mathlib.h>
 #include <lib/matrix/matrix/math.hpp>
+#include <lib/system_identification/signal_generator.hpp>
 #include <px4_platform_common/events.h>
 #include "PositionControl/ControlMath.hpp"
 
@@ -414,6 +416,10 @@ void MulticopterPositionControl::Run()
 
 		_vehicle_land_detected_sub.update(&_vehicle_land_detected);
 
+		if (!_vehicle_control_mode.flag_armed) {
+			resetZThrustChirpSweep();
+		}
+
 		if (_param_mpc_use_hte.get()) {
 			hover_thrust_estimate_s hte;
 
@@ -605,6 +611,7 @@ void MulticopterPositionControl::Run()
 			// Publish attitude setpoint output
 			vehicle_attitude_setpoint_s attitude_setpoint{};
 			_control.getAttitudeSetpoint(attitude_setpoint);
+			updateZThrustChirpSweep(dt, vehicle_local_position, local_pos_sp, attitude_setpoint);
 			attitude_setpoint.timestamp = hrt_absolute_time();
 			_vehicle_attitude_setpoint_pub.publish(attitude_setpoint);
 
@@ -628,6 +635,120 @@ void MulticopterPositionControl::Run()
 	}
 
 	perf_end(_cycle_perf);
+}
+
+void MulticopterPositionControl::resetZThrustChirpSweep()
+{
+	_z_chirp_sweep_time = 0.f;
+	_z_chirp_sweep_signal = 0.f;
+	_z_chirp_sweep_started = false;
+	_z_chirp_sweep_finished = false;
+
+	manual_control_setpoint_s manual_control_setpoint{};
+
+	if (_manual_control_setpoint_sub.copy(&manual_control_setpoint)) {
+		_z_chirp_aux1_high_last = manual_control_setpoint.aux1 > 0.5f;
+
+	} else {
+		_z_chirp_aux1_high_last = false;
+	}
+}
+
+void MulticopterPositionControl::updateZThrustChirpSweep(float dt,
+		const vehicle_local_position_s &vehicle_local_position,
+		const vehicle_local_position_setpoint_s &local_pos_sp, vehicle_attitude_setpoint_s &attitude_setpoint)
+{
+	if (_param_mpc_z_chirp_en.get() <= 0 || !_vehicle_control_mode.flag_armed) {
+		return;
+	}
+
+	bool trigger_start = false;
+
+	manual_control_setpoint_s manual_control_setpoint{};
+
+	if (_manual_control_setpoint_sub.copy(&manual_control_setpoint)) {
+		const bool aux1_high = manual_control_setpoint.aux1 > 0.5f;
+
+		if (aux1_high && !_z_chirp_aux1_high_last && !_z_chirp_sweep_started) {
+			trigger_start = true;
+		}
+
+		_z_chirp_aux1_high_last = aux1_high;
+	}
+
+	if (trigger_start) {
+		_z_chirp_sweep_time = 0.f;
+		_z_chirp_sweep_signal = 0.f;
+		_z_chirp_sweep_started = true;
+		_z_chirp_sweep_finished = false;
+
+		PX4_WARN("Z thrust chirp sweep started! Freq: %.2f-%.2f Hz, Duration: %.2f s, Amplitude: %.3f",
+			 (double)_param_mpc_z_chirp_f0.get(),
+			 (double)_param_mpc_z_chirp_f1.get(),
+			 (double)_param_mpc_z_chirp_t.get(),
+			 (double)_param_mpc_z_chirp_mag.get());
+	}
+
+	if (!_z_chirp_sweep_started || _z_chirp_sweep_finished) {
+		return;
+	}
+
+	const float duration = _param_mpc_z_chirp_t.get();
+
+	if (!(duration > 0.f)) {
+		return;
+	}
+
+	if (_z_chirp_sweep_time >= duration) {
+		_z_chirp_sweep_finished = true;
+		PX4_WARN("Z thrust chirp sweep completed! Total duration: %.2f s", (double)duration);
+		resetZThrustChirpSweep();
+		return;
+	}
+
+	_z_chirp_sweep_signal = _param_mpc_z_chirp_mag.get()
+				* signal_generator::getLinearSineSweep(_param_mpc_z_chirp_f0.get(), _param_mpc_z_chirp_f1.get(),
+						duration, _z_chirp_sweep_time);
+	_z_chirp_sweep_time += dt;
+	attitude_setpoint.thrust_body[2] = math::constrain(attitude_setpoint.thrust_body[2] + _z_chirp_sweep_signal, -1.f,
+					     1.f);
+
+	float acc_sp_body_z = 0.f;
+	vehicle_attitude_s vehicle_attitude{};
+
+	if (_vehicle_attitude_sub.copy(&vehicle_attitude)) {
+		const bool attitude_valid = PX4_ISFINITE(vehicle_attitude.q[0])
+					    && PX4_ISFINITE(vehicle_attitude.q[1])
+					    && PX4_ISFINITE(vehicle_attitude.q[2])
+					    && PX4_ISFINITE(vehicle_attitude.q[3]);
+
+		if (attitude_valid) {
+			Vector3f acc_sp_ned(local_pos_sp.acceleration);
+			ControlMath::setZeroIfNanVector3f(acc_sp_ned);
+			acc_sp_ned(2) += CONSTANTS_ONE_G;
+			const Dcmf R(Quatf(vehicle_attitude.q));
+			const Vector3f acc_sp_body = Vector3f(R.transpose() * acc_sp_ned);
+			acc_sp_body_z = acc_sp_body(2);
+		}
+	}
+
+	float measured_acceleration_z = 0.f;
+	vehicle_acceleration_s vehicle_acceleration{};
+
+	if ((_vehicle_acceleration_sub.update(&vehicle_acceleration) || _vehicle_acceleration_sub.copy(&vehicle_acceleration))
+	    && PX4_ISFINITE(vehicle_acceleration.xyz[2])) {
+		measured_acceleration_z = vehicle_acceleration.xyz[2];
+	}
+
+	thrust_chirp_sweep_s thrust_chirp_sweep{};
+	thrust_chirp_sweep.timestamp_sample = vehicle_local_position.timestamp_sample;
+	thrust_chirp_sweep.timestamp = hrt_absolute_time();
+	thrust_chirp_sweep.chirp = _z_chirp_sweep_signal;
+	thrust_chirp_sweep.r = acc_sp_body_z;
+	thrust_chirp_sweep.u = attitude_setpoint.thrust_body[2];
+	thrust_chirp_sweep.y = measured_acceleration_z;
+
+	_thrust_chirp_sweep_pub.publish(thrust_chirp_sweep);
 }
 
 trajectory_setpoint_s MulticopterPositionControl::generateFailsafeSetpoint(const hrt_abstime &now,

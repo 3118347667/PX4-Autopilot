@@ -108,6 +108,7 @@ void LoggedTopics::add_default_topics()
 	add_optional_topic("px4io_status");
 	add_topic("radio_status");
 	add_topic("rate_chirp_sweep");
+	add_topic("thrust_chirp_sweep");
 	add_optional_topic("rover_attitude_setpoint", 100);
 	add_optional_topic("rover_attitude_status", 100);
 	add_optional_topic("rover_position_setpoint", 100);

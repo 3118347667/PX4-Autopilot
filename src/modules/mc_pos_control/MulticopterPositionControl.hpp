@@ -59,8 +59,12 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
 #include <uORB/topics/hover_thrust_estimate.h>
+#include <uORB/topics/manual_control_setpoint.h>
 #include <uORB/topics/parameter_update.h>
+#include <uORB/topics/thrust_chirp_sweep.h>
 #include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/vehicle_acceleration.h>
+#include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_attitude_setpoint.h>
 #include <uORB/topics/vehicle_constraints.h>
 #include <uORB/topics/vehicle_control_mode.h>
@@ -98,13 +102,17 @@ private:
 	uORB::PublicationData<takeoff_status_s>              _takeoff_status_pub{ORB_ID(takeoff_status)};
 	uORB::Publication<vehicle_attitude_setpoint_s>	     _vehicle_attitude_setpoint_pub{ORB_ID(vehicle_attitude_setpoint)};
 	uORB::Publication<vehicle_local_position_setpoint_s> _local_pos_sp_pub{ORB_ID(vehicle_local_position_setpoint)};	/**< vehicle local position setpoint publication */
+	uORB::Publication<thrust_chirp_sweep_s>              _thrust_chirp_sweep_pub{ORB_ID(thrust_chirp_sweep)};
 
 	uORB::SubscriptionCallbackWorkItem _local_pos_sub{this, ORB_ID(vehicle_local_position)};	/**< vehicle local position */
 
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
 	uORB::Subscription _hover_thrust_estimate_sub{ORB_ID(hover_thrust_estimate)};
+	uORB::Subscription _manual_control_setpoint_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
+	uORB::Subscription _vehicle_acceleration_sub{ORB_ID(vehicle_acceleration)};
+	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _vehicle_constraints_sub{ORB_ID(vehicle_constraints)};
 	uORB::Subscription _vehicle_control_mode_sub{ORB_ID(vehicle_control_mode)};
 	uORB::Subscription _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
@@ -150,6 +158,11 @@ private:
 		(ParamFloat<px4::params::MPC_THR_HOVER>)    _param_mpc_thr_hover,
 		(ParamBool<px4::params::MPC_USE_HTE>)       _param_mpc_use_hte,
 		(ParamBool<px4::params::MPC_ACC_DECOUPLE>)  _param_mpc_acc_decouple,
+		(ParamInt<px4::params::MPC_Z_CHIRP_EN>)     _param_mpc_z_chirp_en,
+		(ParamFloat<px4::params::MPC_Z_CHIRP_F0>)   _param_mpc_z_chirp_f0,
+		(ParamFloat<px4::params::MPC_Z_CHIRP_F1>)   _param_mpc_z_chirp_f1,
+		(ParamFloat<px4::params::MPC_Z_CHIRP_T>)    _param_mpc_z_chirp_t,
+		(ParamFloat<px4::params::MPC_Z_CHIRP_MAG>)  _param_mpc_z_chirp_mag,
 
 		(ParamFloat<px4::params::MPC_VEL_LP>)       _param_mpc_vel_lp,
 		(ParamFloat<px4::params::MPC_VEL_NF_FRQ>)   _param_mpc_vel_nf_frq,
@@ -206,6 +219,12 @@ private:
 	GotoControl _goto_control; ///< class for handling smooth goto position setpoints
 	PositionControl _control; ///< class for core PID position control
 
+	float _z_chirp_sweep_time{0.f};
+	float _z_chirp_sweep_signal{0.f};
+	bool _z_chirp_sweep_started{false};
+	bool _z_chirp_sweep_finished{false};
+	bool _z_chirp_aux1_high_last{false};
+
 	hrt_abstime _last_warn{0}; /**< timer when the last warn message was sent out */
 
 	bool _hover_thrust_initialized{false};
@@ -234,6 +253,11 @@ private:
 	 * @param force forces parameter update.
 	 */
 	void parameters_update(bool force);
+
+	void resetZThrustChirpSweep();
+	void updateZThrustChirpSweep(float dt, const vehicle_local_position_s &vehicle_local_position,
+				     const vehicle_local_position_setpoint_s &local_pos_sp,
+				     vehicle_attitude_setpoint_s &attitude_setpoint);
 
 	/**
 	 * Check for validity of positon/velocity states.
