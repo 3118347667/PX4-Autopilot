@@ -551,7 +551,7 @@ private:
 
 	static bool		_boot_complete;
 
-	static constexpr int	MAVLINK_MIN_INTERVAL{1500};
+	static constexpr int	MAVLINK_MIN_INTERVAL{1000};
 	static constexpr int	MAVLINK_MAX_INTERVAL{10000};
 	static constexpr float	MAVLINK_MIN_MULTIPLIER{0.0005f};
 
