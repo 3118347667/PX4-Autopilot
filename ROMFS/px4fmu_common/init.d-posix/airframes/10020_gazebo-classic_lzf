@@ -1,0 +1,65 @@
+#!/bin/sh
+#
+# @name LZF Quadrotor SITL
+#
+# @type Quadrotor Wide
+#
+# Derived from the 3DR Iris SITL configuration.
+
+. ${R}etc/init.d/rc.mc_defaults
+
+
+param set-default CA_AIRFRAME 0
+
+# Rotor positions are relative to the vehicle center of gravity in PX4 FRD coordinates.
+param set-default CA_ROTOR_COUNT 4
+param set-default CA_ROTOR0_PX 0.085
+param set-default CA_ROTOR0_PY 0.10
+param set-default CA_ROTOR0_PZ -0.01
+param set-default CA_ROTOR0_KM 0.05
+param set-default CA_ROTOR1_PX -0.085
+param set-default CA_ROTOR1_PY -0.10
+param set-default CA_ROTOR1_PZ -0.01
+param set-default CA_ROTOR1_KM 0.05
+param set-default CA_ROTOR2_PX 0.085
+param set-default CA_ROTOR2_PY -0.10
+param set-default CA_ROTOR2_PZ -0.01
+param set-default CA_ROTOR2_KM -0.05
+param set-default CA_ROTOR3_PX -0.085
+param set-default CA_ROTOR3_PY 0.10
+param set-default CA_ROTOR3_PZ -0.01
+param set-default CA_ROTOR3_KM -0.05
+
+# Match the real LZF estimator configuration used upstream of the external EKF.
+param set-default EKF2_GPS_DELAY 110
+
+# Identified in LZF SITL after matching the physical 0.085 x 0.10 m rotor
+# geometry and measured 0.024568 s motor dynamics. The lower loop bandwidth
+# removes the roll/pitch and yaw limit cycles seen with the generic PX4 gains.
+param set-default MC_ROLLRATE_P 0.018000
+param set-default MC_ROLLRATE_I 0.020000
+param set-default MC_ROLLRATE_D 0.000200
+param set-default MC_PITCHRATE_P 0.017200
+param set-default MC_PITCHRATE_I 0.019100
+param set-default MC_PITCHRATE_D 0.000190
+param set-default MC_YAWRATE_P 0.070000
+param set-default MC_YAWRATE_I 0.040000
+param set-default MC_YAWRATE_D 0.000000
+
+param set-default PWM_MAIN_FUNC1 103
+param set-default PWM_MAIN_FUNC2 102
+param set-default PWM_MAIN_FUNC3 101
+param set-default PWM_MAIN_FUNC4 104
+
+param set-default BAT1_N_CELLS 6
+param set-default BAT1_V_CHARGED 4.2
+param set-default BAT1_V_EMPTY 3.0
+param set-default SIM_BAT_MIN_PCT 0
+param set-default SIM_BAT_DYN_EN 1
+param set-default SIM_BAT_DRAIN 1140
+param set-default SIM_BAT_L_REF 4.113
+param set-default SIM_BAT_SAG_I 0.1485
+param set-default SIM_BAT_SAG_P 0.1890
+param set-default SIM_BAT_TAU 2.02
+param set-default SIM_BAT_V_FLOOR 15.0
+param set-default SIM_BAT_V_OVR 0

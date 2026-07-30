@@ -86,6 +86,7 @@ if(gazebo_FOUND)
 		iris_opt_flow_mockup
 		iris_rplidar
 		iris_vision
+		lzf
 		omnicopter
 		plane
 		plane_cam
