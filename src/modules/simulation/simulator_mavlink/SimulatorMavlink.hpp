@@ -139,6 +139,8 @@ private:
 
 	~SimulatorMavlink()
 	{
+		pthread_mutex_destroy(&_esc_feedback_mutex);
+
 		// free perf counters
 		perf_free(_perf_sim_delay);
 		perf_free(_perf_sim_interval);
@@ -223,6 +225,8 @@ private:
 
 	void handle_message(const mavlink_message_t *msg);
 	void handle_message_distance_sensor(const mavlink_message_t *msg);
+	void handle_message_esc_info(const mavlink_message_t *msg);
+	void handle_message_esc_status(const mavlink_message_t *msg);
 	void handle_message_hil_gps(const mavlink_message_t *msg);
 	void handle_message_hil_sensor(const mavlink_message_t *msg);
 	void handle_message_hil_state_quaternion(const mavlink_message_t *msg);
@@ -236,6 +240,7 @@ private:
 	void poll_for_MAVLink_messages();
 	void request_hil_state_quaternion();
 	void send();
+	void send_battery_status();
 	void send_controls();
 	void send_heartbeat();
 	void send_esc_telemetry(mavlink_hil_actuator_controls_t hil_act_control);
@@ -276,6 +281,7 @@ private:
 
 	vehicle_status_s _vehicle_status{};
 	battery_status_s _battery_status{};
+	hrt_abstime _last_battery_status_timestamp_sent{0};
 
 	bool _accel_blocked[ACCEL_COUNT_MAX] {};
 	bool _accel_stuck[ACCEL_COUNT_MAX] {};
@@ -306,6 +312,24 @@ private:
 	float _last_baro_temperature{0.0f};
 
 	int32_t _output_functions[actuator_outputs_s::NUM_ACTUATOR_OUTPUTS] {};
+
+	struct EscFeedback {
+		int32_t rpm[esc_status_s::CONNECTED_ESC_MAX] {};
+		hrt_abstime timestamp[esc_status_s::CONNECTED_ESC_MAX] {};
+		uint32_t generation{0};
+		uint8_t count{0};
+		uint8_t online_flags{0};
+		uint8_t connection_type{esc_status_s::ESC_CONNECTION_TYPE_PPM};
+		bool available{false};
+		bool info_received{false};
+	};
+
+	pthread_mutex_t _esc_feedback_mutex;
+	EscFeedback _esc_feedback{};
+	uint32_t _last_esc_feedback_generation{0};
+	uint16_t _esc_status_counter{0};
+	uint8_t _last_esc_online_flags{0};
+	bool _last_esc_armed_state{false};
 
 #if defined(ENABLE_LOCKSTEP_SCHEDULER)
 	px4::atomic<bool> _has_initialized {false};

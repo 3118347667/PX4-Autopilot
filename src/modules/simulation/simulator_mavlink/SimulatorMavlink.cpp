@@ -91,6 +91,8 @@ static constexpr vehicle_odometry_s vehicle_odometry_empty {
 SimulatorMavlink::SimulatorMavlink() :
 	ModuleParams(nullptr)
 {
+	pthread_mutex_init(&_esc_feedback_mutex, nullptr);
+
 	for (int i = 0; i < actuator_outputs_s::NUM_ACTUATOR_OUTPUTS; ++i) {
 		char param_name[17];
 		snprintf(param_name, sizeof(param_name), "%s_%s%d", "PWM_MAIN", "FUNC", i + 1);
@@ -139,32 +141,130 @@ void SimulatorMavlink::actuator_controls_from_outputs(mavlink_hil_actuator_contr
 void SimulatorMavlink::send_esc_telemetry(mavlink_hil_actuator_controls_t hil_act_control)
 {
 	esc_status_s esc_status{};
-	esc_status.timestamp = hrt_absolute_time();
+	const hrt_abstime now = hrt_absolute_time();
+	esc_status.timestamp = now;
 	const int max_esc_count = math::min(actuator_outputs_s::NUM_ACTUATOR_OUTPUTS, esc_status_s::CONNECTED_ESC_MAX);
 
 	const bool armed = (_vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED);
-	int max_esc_index = 0;
+	EscFeedback esc_feedback;
 
-	for (int i = 0; i < max_esc_count; i++) {
-		if (_output_functions[i] != 0) {
-			max_esc_index = i;
+	pthread_mutex_lock(&_esc_feedback_mutex);
+	esc_feedback = _esc_feedback;
+	pthread_mutex_unlock(&_esc_feedback_mutex);
+
+	if (esc_feedback.available) {
+		const uint8_t esc_count = math::min(esc_feedback.count, static_cast<uint8_t>(max_esc_count));
+		uint8_t online_flags = 0;
+
+		for (uint8_t i = 0; i < esc_count; ++i) {
+			const bool timestamp_valid = esc_feedback.timestamp[i] > 0 && now >= esc_feedback.timestamp[i];
+			const bool feedback_fresh = timestamp_valid && now - esc_feedback.timestamp[i] <= 100_ms;
+			const bool online = feedback_fresh && (esc_feedback.online_flags & (1u << i));
+
+			if (online) {
+				online_flags |= 1u << i;
+			}
+
+			esc_status.esc[i].actuator_function = _output_functions[i];
+			esc_status.esc[i].timestamp = online ? esc_feedback.timestamp[i] : now;
+			esc_status.esc[i].esc_errorcount = 0;
+			esc_status.esc[i].esc_voltage = _battery_status.voltage_v;
+			esc_status.esc[i].esc_current = armed ? 1.0f + math::abs_t(hil_act_control.controls[i]) * 15.0f : 0.0f;
+			esc_status.esc[i].esc_rpm = online ? esc_feedback.rpm[i] : 0;
+			esc_status.esc[i].esc_temperature = 20.0f + math::abs_t(hil_act_control.controls[i]) * 40.0f;
 		}
 
-		esc_status.esc[i].actuator_function = _output_functions[i]; // TODO: this should be in pwm_sim...
-		esc_status.esc[i].timestamp = esc_status.timestamp;
-		esc_status.esc[i].esc_errorcount = 0; // TODO
-		esc_status.esc[i].esc_voltage = _battery_status.voltage_v;
-		esc_status.esc[i].esc_current = armed ? 1.0f + math::abs_t(hil_act_control.controls[i]) * 15.0f :
-						0.0f; // TODO: magic number
-		esc_status.esc[i].esc_rpm = hil_act_control.controls[i] * 6000;  // TODO: magic number
-		esc_status.esc[i].esc_temperature = 20.0 + math::abs_t(hil_act_control.controls[i]) * 40.0;
+		const bool feedback_changed = esc_feedback.generation != _last_esc_feedback_generation;
+		const bool online_flags_changed = online_flags != _last_esc_online_flags;
+		const bool armed_state_changed = armed != _last_esc_armed_state;
+
+		if (!feedback_changed && !online_flags_changed && !armed_state_changed) {
+			return;
+		}
+
+		esc_status.counter = _esc_status_counter++;
+		esc_status.esc_count = esc_count;
+		esc_status.esc_connectiontype = esc_feedback.connection_type;
+		esc_status.esc_armed_flags = armed ? (1u << esc_count) - 1u : 0u;
+		esc_status.esc_online_flags = online_flags;
+
+		_last_esc_feedback_generation = esc_feedback.generation;
+		_last_esc_online_flags = online_flags;
+		_last_esc_armed_state = armed;
+
+	} else {
+		int max_esc_index = 0;
+
+		for (int i = 0; i < max_esc_count; i++) {
+			if (_output_functions[i] != 0) {
+				max_esc_index = i;
+			}
+
+			esc_status.esc[i].actuator_function = _output_functions[i]; // TODO: this should be in pwm_sim...
+			esc_status.esc[i].timestamp = esc_status.timestamp;
+			esc_status.esc[i].esc_errorcount = 0; // TODO
+			esc_status.esc[i].esc_voltage = _battery_status.voltage_v;
+			esc_status.esc[i].esc_current = armed ? 1.0f + math::abs_t(hil_act_control.controls[i]) * 15.0f :
+							0.0f; // TODO: magic number
+			esc_status.esc[i].esc_rpm = hil_act_control.controls[i] * 6000;  // Legacy fallback for simulators without ESC feedback.
+			esc_status.esc[i].esc_temperature = 20.0f + math::abs_t(hil_act_control.controls[i]) * 40.0f;
+		}
+
+		esc_status.counter = _esc_status_counter++;
+		esc_status.esc_count = max_esc_index + 1;
+		esc_status.esc_armed_flags = (1u << esc_status.esc_count) - 1u;
+		esc_status.esc_online_flags = (1u << esc_status.esc_count) - 1u;
 	}
 
-	esc_status.esc_count = max_esc_index + 1;
-	esc_status.esc_armed_flags = (1u << esc_status.esc_count) - 1;
-	esc_status.esc_online_flags = (1u << esc_status.esc_count) - 1;
-
 	_esc_status_pub.publish(esc_status);
+}
+
+void SimulatorMavlink::send_battery_status()
+{
+	if (_battery_status.timestamp == 0 || _battery_status.timestamp == _last_battery_status_timestamp_sent) {
+		return;
+	}
+
+	mavlink_battery_status_t battery_status{};
+	battery_status.id = _battery_status.id > 0 ? _battery_status.id - 1 : 0;
+	battery_status.battery_function = MAV_BATTERY_FUNCTION_ALL;
+	battery_status.type = MAV_BATTERY_TYPE_LIPO;
+	battery_status.temperature = INT16_MAX;
+	battery_status.current_battery = -1;
+	battery_status.current_consumed = -1;
+	battery_status.energy_consumed = -1;
+	battery_status.battery_remaining = -1;
+	battery_status.charge_state = MAV_BATTERY_CHARGE_STATE_UNDEFINED;
+
+	for (size_t i = 0; i < MAVLINK_MSG_BATTERY_STATUS_FIELD_VOLTAGES_LEN; ++i) {
+		battery_status.voltages[i] = UINT16_MAX;
+	}
+
+	if (_battery_status.connected) {
+		if (PX4_ISFINITE(_battery_status.voltage_v) && _battery_status.voltage_v > 0.f) {
+			const float voltage_mv = math::constrain(
+						 _battery_status.voltage_v * 1000.f, 1.f, static_cast<float>(UINT16_MAX - 1));
+			battery_status.voltages[0] = static_cast<uint16_t>(roundf(voltage_mv));
+		}
+
+		if (PX4_ISFINITE(_battery_status.current_a) && _battery_status.current_a >= 0.f) {
+			battery_status.current_battery = static_cast<int16_t>(roundf(_battery_status.current_a * 100.f));
+			battery_status.current_consumed = static_cast<int32_t>(roundf(_battery_status.discharged_mah));
+		}
+
+		if (PX4_ISFINITE(_battery_status.remaining)) {
+			battery_status.battery_remaining = static_cast<int8_t>(
+					roundf(math::constrain(_battery_status.remaining, 0.f, 1.f) * 100.f));
+		}
+
+		battery_status.charge_state = MAV_BATTERY_CHARGE_STATE_OK;
+	}
+
+	mavlink_message_t message{};
+	mavlink_msg_battery_status_encode(
+		_param_mav_sys_id.get(), _param_mav_comp_id.get(), &message, &battery_status);
+	send_mavlink_message(message);
+	_last_battery_status_timestamp_sent = _battery_status.timestamp;
 }
 
 void SimulatorMavlink::send_controls()
@@ -180,6 +280,7 @@ void SimulatorMavlink::send_controls()
 
 		PX4_DEBUG("sending controls t=%ld (%ld)", _actuator_outputs.timestamp, hil_act_control.time_usec);
 
+		send_battery_status();
 		send_mavlink_message(message);
 
 		send_esc_telemetry(hil_act_control);
@@ -387,6 +488,14 @@ void SimulatorMavlink::handle_message(const mavlink_message_t *msg)
 		handle_message_hil_state_quaternion(msg);
 		break;
 
+	case MAVLINK_MSG_ID_ESC_INFO:
+		handle_message_esc_info(msg);
+		break;
+
+	case MAVLINK_MSG_ID_ESC_STATUS:
+		handle_message_esc_status(msg);
+		break;
+
 	case MAVLINK_MSG_ID_RAW_RPM:
 		mavlink_raw_rpm_t rpm_mavlink;
 		mavlink_msg_raw_rpm_decode(msg, &rpm_mavlink);
@@ -396,6 +505,58 @@ void SimulatorMavlink::handle_message(const mavlink_message_t *msg)
 		_rpm_pub.publish(rpm_uorb);
 		break;
 	}
+}
+
+void SimulatorMavlink::handle_message_esc_info(const mavlink_message_t *msg)
+{
+	mavlink_esc_info_t esc_info;
+	mavlink_msg_esc_info_decode(msg, &esc_info);
+
+	const uint8_t count = math::min(esc_info.count, esc_status_s::CONNECTED_ESC_MAX);
+	const uint8_t valid_mask = count > 0 ? (1u << count) - 1u : 0u;
+
+	pthread_mutex_lock(&_esc_feedback_mutex);
+	_esc_feedback.count = count;
+	_esc_feedback.online_flags = esc_info.info & valid_mask;
+	_esc_feedback.connection_type = esc_info.connection_type;
+	_esc_feedback.available = count > 0;
+	_esc_feedback.info_received = true;
+	++_esc_feedback.generation;
+	pthread_mutex_unlock(&_esc_feedback_mutex);
+}
+
+void SimulatorMavlink::handle_message_esc_status(const mavlink_message_t *msg)
+{
+	mavlink_esc_status_t esc_status;
+	mavlink_msg_esc_status_decode(msg, &esc_status);
+
+	if (esc_status.index >= esc_status_s::CONNECTED_ESC_MAX) {
+		return;
+	}
+
+	const hrt_abstime now = hrt_absolute_time();
+	const uint8_t field_count = math::min(
+					      static_cast<uint8_t>(MAVLINK_MSG_ESC_STATUS_FIELD_RPM_LEN),
+					      static_cast<uint8_t>(esc_status_s::CONNECTED_ESC_MAX - esc_status.index));
+
+	pthread_mutex_lock(&_esc_feedback_mutex);
+
+	for (uint8_t i = 0; i < field_count; ++i) {
+		const uint8_t esc_index = esc_status.index + i;
+		_esc_feedback.rpm[esc_index] = esc_status.rpm[i];
+		_esc_feedback.timestamp[esc_index] = now;
+	}
+
+	const uint8_t received_count = esc_status.index + field_count;
+	_esc_feedback.count = math::max(_esc_feedback.count, received_count);
+
+	if (!_esc_feedback.info_received) {
+		_esc_feedback.online_flags |= ((1u << field_count) - 1u) << esc_status.index;
+	}
+
+	_esc_feedback.available = true;
+	++_esc_feedback.generation;
+	pthread_mutex_unlock(&_esc_feedback_mutex);
 }
 
 void SimulatorMavlink::handle_message_distance_sensor(const mavlink_message_t *msg)
