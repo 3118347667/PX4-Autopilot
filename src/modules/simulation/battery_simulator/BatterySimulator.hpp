@@ -35,6 +35,7 @@
 
 #include <lib/battery/battery.h>
 #include <lib/perf/perf_counter.h>
+#include <px4_platform_common/atomic.h>
 #include <px4_platform_common/defines.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/module_params.h>
@@ -43,6 +44,7 @@
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionInterval.hpp>
 #include <uORB/topics/battery_status.h>
+#include <uORB/topics/esc_status.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/vehicle_command.h>
@@ -66,16 +68,22 @@ public:
 	static int print_usage(const char *reason = nullptr);
 
 	bool init();
+	void requestReset() { _reset_requested.store(true); }
 
 private:
 	void Run() override;
 	void updateCommands();
+	float motorLoad(hrt_abstime now_us, bool &feedback_valid);
 
 	static constexpr uint32_t BATTERY_SIMLATOR_SAMPLE_FREQUENCY_HZ = 100; // Hz
 	static constexpr uint32_t BATTERY_SIMLATOR_SAMPLE_INTERVAL_US = 1_s / BATTERY_SIMLATOR_SAMPLE_FREQUENCY_HZ;
+	static constexpr uint8_t DYNAMIC_MOTOR_COUNT = 4;
+	static constexpr hrt_abstime ESC_FEEDBACK_TIMEOUT_US = 100_ms;
+	static constexpr float RPM_TO_RAD_PER_SECOND = 0.104719755f;
 
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _esc_status_sub{ORB_ID(esc_status)};
 
 	uORB::Subscription _vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Publication<vehicle_command_ack_s> _command_ack_pub{ORB_ID(vehicle_command_ack)};
@@ -83,15 +91,26 @@ private:
 	Battery _battery;
 
 	uint64_t _last_integration_us{0};
+	uint64_t _last_dynamic_update_us{0};
 	float _battery_percentage{1.f};
+	float _polarization_load{0.f};
 	bool _armed{false};
+	esc_status_s _esc_status{};
 
 	bool _force_empty_battery{false};
+	px4::atomic_bool _reset_requested{false};
 
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};
 
 	DEFINE_PARAMETERS(
 		(ParamFloat<px4::params::SIM_BAT_DRAIN>) _param_sim_bat_drain, ///< battery drain interval
-		(ParamFloat<px4::params::SIM_BAT_MIN_PCT>) _param_bat_min_pct //< minimum battery percentage
+		(ParamFloat<px4::params::SIM_BAT_MIN_PCT>) _param_bat_min_pct, ///< minimum battery percentage
+		(ParamFloat<px4::params::SIM_BAT_V_OVR>) _param_sim_bat_v_ovr, ///< fixed pack voltage override
+		(ParamInt<px4::params::SIM_BAT_DYN_EN>) _param_sim_bat_dyn_en, ///< enable RPM-dependent battery model
+		(ParamFloat<px4::params::SIM_BAT_L_REF>) _param_sim_bat_l_ref, ///< reference motor load
+		(ParamFloat<px4::params::SIM_BAT_SAG_I>) _param_sim_bat_sag_i, ///< instantaneous voltage sag coefficient
+		(ParamFloat<px4::params::SIM_BAT_SAG_P>) _param_sim_bat_sag_p, ///< polarization voltage sag coefficient
+		(ParamFloat<px4::params::SIM_BAT_TAU>) _param_sim_bat_tau, ///< polarization time constant
+		(ParamFloat<px4::params::SIM_BAT_V_FLOOR>) _param_sim_bat_v_floor ///< minimum terminal voltage
 	)
 };

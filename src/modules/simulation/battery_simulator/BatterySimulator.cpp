@@ -33,6 +33,8 @@
 
 #include "BatterySimulator.hpp"
 
+#include <cmath>
+
 BatterySimulator::BatterySimulator() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::hp_default),
@@ -80,40 +82,152 @@ void BatterySimulator::Run()
 		}
 	}
 
+	_esc_status_sub.update(&_esc_status);
+
 	const hrt_abstime now_us = hrt_absolute_time();
 
 	const float discharge_interval_us = _param_sim_bat_drain.get() * 1000 * 1000;
+	const float empty_voltage = _battery.empty_cell_voltage() * _battery.cell_count();
+	const float full_voltage = _battery.full_cell_voltage() * _battery.cell_count();
 
-	if (_armed) {
-		if (_last_integration_us != 0) {
-			_battery_percentage -= (now_us - _last_integration_us) / discharge_interval_us;
+	bool reset_requested = true;
+	float voltage_override = _param_sim_bat_v_ovr.get();
+
+	if (_reset_requested.compare_exchange(&reset_requested, false)) {
+		if (voltage_override >= 0.f) {
+			_param_sim_bat_v_ovr.set(0.f);
+			_param_sim_bat_v_ovr.commit();
+			voltage_override = 0.f;
 		}
 
-		_last_integration_us = now_us;
-
-	} else {
 		_battery_percentage = 1.f;
 		_last_integration_us = 0;
+		_last_dynamic_update_us = 0;
+		_polarization_load = 0.f;
+		_esc_status = {};
+		PX4_INFO("battery reset to full");
 	}
 
 	float ibatt = -1.0f; // no current sensor in simulation
+	float published_percentage = _battery_percentage;
+	float vbatt = full_voltage;
 
-	_battery_percentage = math::max(_battery_percentage, _param_bat_min_pct.get() / 100.f);
-	float vbatt = math::interpolate(_battery_percentage, 0.f, 1.f, _battery.empty_cell_voltage(),
-					_battery.full_cell_voltage());
+	if (_param_sim_bat_dyn_en.get() != 0) {
+		float dt = 0.f;
 
-	if (_force_empty_battery) {
-		vbatt = _battery.empty_cell_voltage();
+		if (_last_dynamic_update_us != 0 && now_us > _last_dynamic_update_us) {
+			dt = math::min((now_us - _last_dynamic_update_us) * 1e-6f,
+				       ESC_FEEDBACK_TIMEOUT_US * 1e-6f);
+		}
+
+		_last_dynamic_update_us = now_us;
+
+		bool feedback_valid = false;
+		const float measured_load = motorLoad(now_us, feedback_valid);
+		const bool voltage_overridden = voltage_override > 0.f;
+		const bool apply_motor_load = _armed && feedback_valid && !voltage_overridden;
+		const float motor_load = apply_motor_load ? measured_load : 0.f;
+		const float tau = math::max(_param_sim_bat_tau.get(), 0.01f);
+		const float polarization_alpha = -std::expm1f(-dt / tau);
+		_polarization_load += polarization_alpha * (motor_load - _polarization_load);
+
+		if (apply_motor_load && dt > 0.f) {
+			const float reference_load = math::max(_param_sim_bat_l_ref.get(), 0.001f);
+			const float discharge_interval = math::max(_param_sim_bat_drain.get(), 1.f);
+			_battery_percentage -= (motor_load / reference_load) * dt / discharge_interval;
+		}
+
+		if (!_armed && voltage_override < 0.f) {
+			_battery_percentage = 1.f;
+			_polarization_load = 0.f;
+		}
+
+		_battery_percentage = math::constrain(_battery_percentage, _param_bat_min_pct.get() / 100.f, 1.f);
+		published_percentage = _force_empty_battery ? 0.f : _battery_percentage;
+
+		if (_force_empty_battery) {
+			vbatt = empty_voltage;
+
+		} else if (voltage_overridden) {
+			vbatt = math::constrain(voltage_override, empty_voltage, full_voltage);
+
+		} else {
+			const float open_circuit_voltage = math::interpolate(_battery_percentage, 0.f, 1.f,
+						   empty_voltage, full_voltage);
+			const float terminal_voltage = open_circuit_voltage
+						       - _param_sim_bat_sag_i.get() * motor_load
+						       - _param_sim_bat_sag_p.get() * _polarization_load;
+			const float voltage_floor = math::constrain(_param_sim_bat_v_floor.get(), 0.f, full_voltage);
+			vbatt = math::constrain(terminal_voltage, voltage_floor, full_voltage);
+		}
+
+		_last_integration_us = 0;
+
+	} else {
+		_last_dynamic_update_us = 0;
+		_polarization_load = 0.f;
+
+		if (voltage_override > 0.f) {
+			const float constrained_voltage = math::constrain(voltage_override, empty_voltage, full_voltage);
+			_battery_percentage = math::interpolate(constrained_voltage, empty_voltage, full_voltage, 0.f, 1.f);
+			_last_integration_us = 0;
+
+		} else if (_armed) {
+			if (_last_integration_us != 0) {
+				_battery_percentage -= (now_us - _last_integration_us) / discharge_interval_us;
+			}
+
+			_last_integration_us = now_us;
+
+		} else {
+			if (voltage_override < 0.f) {
+				_battery_percentage = 1.f;
+			}
+
+			_last_integration_us = 0;
+		}
+
+		_battery_percentage = math::constrain(_battery_percentage, _param_bat_min_pct.get() / 100.f, 1.f);
+		published_percentage = _force_empty_battery ? 0.f : _battery_percentage;
+		vbatt = math::interpolate(published_percentage, 0.f, 1.f, empty_voltage, full_voltage);
 	}
 
-	vbatt *= _battery.cell_count();
-
 	_battery.setConnected(true);
+	_battery.setStateOfCharge(published_percentage);
 	_battery.updateVoltage(vbatt);
 	_battery.updateCurrent(ibatt);
 	_battery.updateAndPublishBatteryStatus(now_us);
 
 	perf_end(_loop_perf);
+}
+
+float BatterySimulator::motorLoad(hrt_abstime now_us, bool &feedback_valid)
+{
+	feedback_valid = false;
+
+	constexpr uint32_t required_esc_flags = (1u << DYNAMIC_MOTOR_COUNT) - 1u;
+
+	if (_esc_status.esc_count < DYNAMIC_MOTOR_COUNT
+	    || (_esc_status.esc_online_flags & required_esc_flags) != required_esc_flags) {
+		return 0.f;
+	}
+
+	float load_sum = 0.f;
+
+	for (uint8_t i = 0; i < DYNAMIC_MOTOR_COUNT; ++i) {
+		const hrt_abstime esc_timestamp = _esc_status.esc[i].timestamp;
+
+		if (esc_timestamp == 0 || now_us < esc_timestamp || now_us - esc_timestamp > ESC_FEEDBACK_TIMEOUT_US) {
+			return 0.f;
+		}
+
+		const float omega_normalized = math::max(static_cast<float>(_esc_status.esc[i].esc_rpm), 0.f)
+					       * RPM_TO_RAD_PER_SECOND / 1000.f;
+		load_sum += omega_normalized * omega_normalized * omega_normalized;
+	}
+
+	feedback_valid = true;
+	return load_sum / DYNAMIC_MOTOR_COUNT;
 }
 
 void BatterySimulator::updateCommands()
@@ -195,6 +309,15 @@ int BatterySimulator::task_spawn(int argc, char *argv[])
 
 int BatterySimulator::custom_command(int argc, char *argv[])
 {
+	if (!is_running()) {
+		return print_usage("not running");
+	}
+
+	if (!strcmp(argv[0], "reset")) {
+		get_instance()->requestReset();
+		return 0;
+	}
+
 	return print_usage("unknown command");
 }
 
@@ -213,6 +336,7 @@ int BatterySimulator::print_usage(const char *reason)
 
 	PRINT_MODULE_USAGE_NAME("battery_simulator", "system");
 	PRINT_MODULE_USAGE_COMMAND("start");
+	PRINT_MODULE_USAGE_COMMAND_DESCR("reset", "clear voltage override and restore a full battery");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;

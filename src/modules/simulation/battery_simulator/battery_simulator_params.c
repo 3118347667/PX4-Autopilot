@@ -69,3 +69,89 @@ PARAM_DEFINE_FLOAT(SIM_BAT_DRAIN, 60);
  * @group SITL
  */
 PARAM_DEFINE_FLOAT(SIM_BAT_MIN_PCT, 50.0f);
+
+/**
+ * Simulator battery voltage override
+ *
+ * Set to -1 to retain the legacy behavior that resets the battery while
+ * disarmed. Set to 0 to use automatic persistent discharge. A positive value
+ * fixes the simulated pack voltage and pauses automatic discharge. The
+ * simulator constrains the value to the configured empty and full pack
+ * voltages.
+ *
+ * @min -1
+ * @max 100
+ * @increment 0.1
+ * @unit V
+ *
+ * @group SITL
+ */
+PARAM_DEFINE_FLOAT(SIM_BAT_V_OVR, -1.0f);
+
+/**
+ * Enable RPM-dependent simulator battery dynamics
+ *
+ * Uses fresh mechanical ESC RPM feedback to model load-dependent terminal
+ * voltage sag, polarization recovery and load-scaled state-of-charge drain.
+ *
+ * @boolean
+ * @group SITL
+ */
+PARAM_DEFINE_INT32(SIM_BAT_DYN_EN, 0);
+
+/**
+ * Simulator battery reference motor load
+ *
+ * Reference for state-of-charge drain. Load is the mean across four motors of
+ * (omega / 1000)^3, where omega is mechanical angular velocity in rad/s.
+ *
+ * @min 0.001
+ * @max 100
+ * @increment 0.001
+ * @group SITL
+ */
+PARAM_DEFINE_FLOAT(SIM_BAT_L_REF, 4.113f);
+
+/**
+ * Simulator battery instantaneous sag coefficient in V/load
+ *
+ * @min 0
+ * @max 10
+ * @increment 0.0001
+ * @group SITL
+ */
+PARAM_DEFINE_FLOAT(SIM_BAT_SAG_I, 0.1485f);
+
+/**
+ * Simulator battery polarization sag coefficient in V/load
+ *
+ * @min 0
+ * @max 10
+ * @increment 0.0001
+ * @group SITL
+ */
+PARAM_DEFINE_FLOAT(SIM_BAT_SAG_P, 0.1890f);
+
+/**
+ * Simulator battery polarization time constant
+ *
+ * @min 0.01
+ * @max 100
+ * @increment 0.01
+ * @unit s
+ * @group SITL
+ */
+PARAM_DEFINE_FLOAT(SIM_BAT_TAU, 2.02f);
+
+/**
+ * Simulator battery minimum terminal voltage
+ *
+ * Numerical lower bound applied after load-dependent voltage sag.
+ *
+ * @min 0
+ * @max 100
+ * @increment 0.1
+ * @unit V
+ * @group SITL
+ */
+PARAM_DEFINE_FLOAT(SIM_BAT_V_FLOOR, 15.0f);
