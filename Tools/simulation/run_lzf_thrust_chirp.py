@@ -28,7 +28,19 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--connection", default="udpin:0.0.0.0:14550")
+    parser.add_argument(
+        "--bootstrap-address",
+        help=(
+            "Optional host:port to seed an udpin peer before the first PX4 "
+            "heartbeat, for example 127.0.0.1:14600"
+        ),
+    )
     parser.add_argument("--voltage", type=float, default=0.0)
+    parser.add_argument(
+        "--thr-mdl-fac",
+        type=float,
+        help="Optional THR_MDL_FAC value in the PX4-supported range [0, 1]",
+    )
     parser.add_argument("--takeoff-altitude", type=float, default=2.5)
     parser.add_argument(
         "--hover-mode",
@@ -37,8 +49,8 @@ def parse_args() -> argparse.Namespace:
         help="PX4 mode used during the chirp",
     )
     parser.add_argument("--hover-seconds", type=float, default=10.0)
-    parser.add_argument("--start-frequency", type=float, default=0.5)
-    parser.add_argument("--end-frequency", type=float, default=3.0)
+    parser.add_argument("--start-frequency", type=float, default=0.25)
+    parser.add_argument("--end-frequency", type=float, default=5.0)
     parser.add_argument("--duration", type=float, default=60.0)
     parser.add_argument("--magnitude", type=float, default=0.15)
     parser.add_argument("--timeout", type=float, default=45.0)
@@ -46,7 +58,9 @@ def parse_args() -> argparse.Namespace:
 
 
 class Vehicle:
-    def __init__(self, connection: str, timeout: float):
+    def __init__(
+        self, connection: str, timeout: float, bootstrap_address: Optional[str] = None
+    ):
         self.master = mavutil.mavlink_connection(
             connection,
             autoreconnect=True,
@@ -54,6 +68,18 @@ class Vehicle:
             source_component=190,
         )
         self.timeout = timeout
+
+        if bootstrap_address:
+            host, port = bootstrap_address.rsplit(":", 1)
+            peer = (host, int(port))
+            if not hasattr(self.master, "clients"):
+                raise RuntimeError(
+                    "--bootstrap-address requires an udpin connection"
+                )
+            self.master.clients.add(peer)
+            self.master.clients_last_alive[peer] = time.time()
+            self.heartbeat()
+
         heartbeat = None
         deadline = time.monotonic() + timeout
 
@@ -409,6 +435,8 @@ class Vehicle:
 
 def main() -> int:
     args = parse_args()
+    if args.thr_mdl_fac is not None and not 0.0 <= args.thr_mdl_fac <= 1.0:
+        raise ValueError("--thr-mdl-fac must be between 0 and 1")
     lock_file = LOCK_PATH.open("w")
 
     try:
@@ -418,8 +446,8 @@ def main() -> int:
             f"another LZF thrust chirp is already running ({LOCK_PATH})"
         ) from error
 
-    vehicle = Vehicle(args.connection, args.timeout)
-    for name, value in (
+    vehicle = Vehicle(args.connection, args.timeout, args.bootstrap_address)
+    parameters = [
         ("MPC_Z_CHIRP_EN", 1),
         ("MPC_Z_CHIRP_F0", args.start_frequency),
         ("MPC_Z_CHIRP_F1", args.end_frequency),
@@ -434,7 +462,11 @@ def main() -> int:
         ("RC_MAP_YAW", 4),
         ("RC_MAP_AUX1", 8),
         ("SIM_BAT_V_OVR", args.voltage),
-    ):
+    ]
+    if args.thr_mdl_fac is not None:
+        parameters.append(("THR_MDL_FAC", args.thr_mdl_fac))
+
+    for name, value in parameters:
         vehicle.set_parameter(name, value)
 
     armed = False
