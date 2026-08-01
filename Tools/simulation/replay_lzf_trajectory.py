@@ -270,7 +270,15 @@ def main() -> int:
         if rospy.is_shutdown():
             return 1
 
-        message = copy.deepcopy(original)
+        # rosbag can materialize a dynamic Python class when the recorded
+        # PositionCommand MD5 differs from the currently sourced message.
+        # Publishing that object directly makes rospy treat it as the first
+        # field (Header) and fail before serialization. Rebuild the command
+        # with the current class while preserving every common field.
+        message = PositionCommand()
+        for field in message.__slots__:
+            if hasattr(original, field):
+                setattr(message, field, copy.deepcopy(getattr(original, field)))
         message.header.stamp = rospy.Time.now()
         message.position.x += offset[0]
         message.position.y += offset[1]
