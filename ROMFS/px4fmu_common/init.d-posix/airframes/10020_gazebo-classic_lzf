@@ -33,15 +33,17 @@ param set-default CA_ROTOR3_KM -0.05
 # Match the real LZF estimator configuration used upstream of the external EKF.
 param set-default EKF2_GPS_DELAY 110
 
-# Identified in LZF SITL after matching the physical 0.085 x 0.10 m rotor
-# geometry and measured 0.024568 s motor dynamics. The lower loop bandwidth
-# removes the roll/pitch and yaw limit cycles seen with the generic PX4 gains.
-param set-default MC_ROLLRATE_P 0.018000
-param set-default MC_ROLLRATE_I 0.020000
-param set-default MC_ROLLRATE_D 0.000200
-param set-default MC_PITCHRATE_P 0.017200
-param set-default MC_PITCHRATE_I 0.019100
-param set-default MC_PITCHRATE_D 0.000190
+# Reidentified after enabling the slowed-rotor inertia compensation. A direct
+# 4 deg, 0.5-5 Hz attitude sweep selected the higher attitude bandwidth and a
+# modest rate-loop increase without a 4-5 Hz gain peak or motor saturation.
+param set-default MC_ROLL_P 8.000000
+param set-default MC_PITCH_P 8.000000
+param set-default MC_ROLLRATE_P 0.020700
+param set-default MC_ROLLRATE_I 0.022000
+param set-default MC_ROLLRATE_D 0.000230
+param set-default MC_PITCHRATE_P 0.019780
+param set-default MC_PITCHRATE_I 0.021000
+param set-default MC_PITCHRATE_D 0.000219
 param set-default MC_YAWRATE_P 0.070000
 param set-default MC_YAWRATE_I 0.040000
 param set-default MC_YAWRATE_D 0.000000
