@@ -78,6 +78,16 @@ def parse_args() -> argparse.Namespace:
         help="SITL dataset to compare against the real flight",
     )
     parser.add_argument(
+        "--bag-odom-topic",
+        action="append",
+        default=[],
+        metavar="NAME=TOPIC",
+        help=(
+            "override the odometry topic for one named ROS-bag dataset; "
+            "repeat for multiple datasets"
+        ),
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=Path("build/lzf_fidelity"),
@@ -101,6 +111,25 @@ def parse_dataset(value: str, role: str) -> DatasetSpec:
         bag=Path(parts[2]) if len(parts) == 3 and parts[2] else None,
         role=role,
     )
+
+
+def parse_bag_odom_topics(values: Sequence[str]) -> Dict[str, str]:
+    topics: Dict[str, str] = {}
+
+    for value in values:
+        name, separator, topic = value.partition("=")
+
+        if not separator or not name or not topic.startswith("/"):
+            raise ValueError(
+                f"invalid bag odometry override '{value}', expected NAME=/topic"
+            )
+
+        if name in topics:
+            raise ValueError(f"duplicate bag odometry override for '{name}'")
+
+        topics[name] = topic
+
+    return topics
 
 
 def get_topic(ulog: ULog, name: str, required: bool = True) -> Optional[Dict[str, np.ndarray]]:
@@ -894,7 +923,10 @@ def fit_through_origin(x: np.ndarray, y: np.ndarray) -> Tuple[float, Dict[str, f
 
 
 def analyze_bag(
-    spec: DatasetSpec, parameters: ModelParameters, output_dir: Path
+    spec: DatasetSpec,
+    parameters: ModelParameters,
+    output_dir: Path,
+    odom_topic: Optional[str] = None,
 ) -> Tuple[Dict[str, object], Dict[str, np.ndarray]]:
     try:
         import rosbag
@@ -918,11 +950,19 @@ def analyze_bag(
     command_time: List[float] = []
 
     with rosbag.Bag(str(spec.bag)) as bag:
-        odom_source = (
-            "/odom_converter/converted_odom0"
-            if bag.get_message_count(["/odom_converter/converted_odom0"]) > 0
-            else "/mavros/local_position/odom"
-        )
+        if odom_topic is not None:
+            if bag.get_message_count([odom_topic]) <= 0:
+                raise RuntimeError(
+                    f"ROS bag for {spec.name} does not contain requested "
+                    f"odometry topic {odom_topic}"
+                )
+            odom_source = odom_topic
+        else:
+            odom_source = (
+                "/odom_converter/converted_odom0"
+                if bag.get_message_count(["/odom_converter/converted_odom0"]) > 0
+                else "/mavros/local_position/odom"
+            )
         for topic, message, record_time in bag.read_messages(
             topics=[
                 "/debugPx4ctrl",
@@ -1469,8 +1509,20 @@ def main() -> int:
     try:
         datasets.extend(parse_dataset(value, "holdout") for value in args.holdout)
         datasets.extend(parse_dataset(value, "simulation") for value in args.sim)
+        bag_odom_topics = parse_bag_odom_topics(args.bag_odom_topic)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)
+        return 2
+
+    dataset_names = {spec.name for spec in datasets}
+    unknown_odom_overrides = sorted(set(bag_odom_topics) - dataset_names)
+
+    if unknown_odom_overrides:
+        print(
+            "error: bag odometry override references unknown dataset(s): "
+            + ", ".join(unknown_odom_overrides),
+            file=sys.stderr,
+        )
         return 2
 
     for spec in datasets:
@@ -1498,7 +1550,10 @@ def main() -> int:
             if spec.bag is not None:
                 print(f"[{spec.name}] analyzing ROS bag {spec.bag}")
                 bag_metrics, bag_series = analyze_bag(
-                    spec, parameters, args.output_dir
+                    spec,
+                    parameters,
+                    args.output_dir,
+                    bag_odom_topics.get(spec.name),
                 )
                 dataset_metrics["bag"] = bag_metrics
                 del bag_series

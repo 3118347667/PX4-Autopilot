@@ -181,14 +181,14 @@ def write_report(
         "已经进入模型。",
         "- 独立实飞验证显示，稳态 RPM 误差约 `4.4%~4.7%`，低进动比轴向力误差约 "
         "`0.81~0.86 m/s²`。",
-        "- 严格复现实飞参数后，FAC/RLS 在定点悬停阶段即翻转；关闭 FAC 后可稳定悬停，"
+        "- 严格复现实飞参数后，旧 FAC 控制配置在定点悬停阶段即翻转；关闭 FAC 后可稳定悬停，"
         "但回放同一圈轨迹 `5.57 s` 后仍超过 60° 并坠落，而实机 18 圈最大位置误差仅 "
         "`0.58 m`。",
         "- 此前的 SITL 轨迹试验没有完全匹配实机的控制分配、`THR_MDL_FAC` 和姿态增益，"
         "只能作为预试验，不能再称为“精确实机配置”。",
         "- 更新实测惯量和电机时间常数后，PX4 原生悬停保持有界但出现 `8.82 Hz` 俯仰极限环；"
         "说明惯量数值已进入物理模型，但控制器、推力/力矩增益和执行机构动态尚未闭环匹配。",
-        "- 因而不能用当前模型评估激烈轨迹的控制器稳定裕度、FAC/RLS 收敛或实机安全边界。",
+        "- 因而不能用当前模型评估激烈轨迹的控制器稳定裕度、FAC 控制效果或实机安全边界。",
         "",
         "## 实机交叉验证",
         "",
@@ -377,7 +377,7 @@ def write_report(
             f"| 更新后：PX4 原生定点悬停 | 未翻转，但存在 8.82 Hz 俯仰极限环 | "
             f"- | - | 未超过 60° | "
             f"{datasets['sim-hover']['ulog']['rate_tracking']['pooled']['rmse']:.3f} rad/s |",
-            f"| 更新前：旧 CA + 实机 PWM + FAC/RLS | 定点阶段翻转；进入悬停约 "
+            f"| 更新前：旧 CA + 实机 PWM + FAC | 定点阶段翻转；进入悬停约 "
             f"5.0 s 后超过 60° | - | - | "
             f"{as_flown_exact['stability']['first_tilt_over_60_s_after_arm']:.2f} s* | "
             f"{as_flown_exact['rate_tracking']['pooled']['rmse']:.3f} rad/s |",
@@ -386,7 +386,7 @@ def write_report(
             f"{as_flown_no_fac_trajectory['time_to_position_error_1m_s']:.2f} s | "
             f"{as_flown_no_fac_trajectory['time_to_tilt_over_60_deg_s']:.2f} s | "
             f"{as_flown_no_fac['ulog']['rate_tracking']['pooled']['rmse']:.3f} rad/s |",
-            f"| 此前预试验：FAC/RLS，参数未完全对齐 | 定点阶段翻转；解锁后 "
+            f"| 此前预试验：FAC，参数未完全对齐 | 定点阶段翻转；解锁后 "
             f"{exact_fac['stability']['first_tilt_over_60_s_after_arm']:.2f} s 超过 60° | "
             f"- | - | {exact_fac['stability']['first_tilt_over_60_s_after_arm']:.2f} s* | "
             f"{exact_fac['rate_tracking']['pooled']['rmse']:.3f} rad/s |",
@@ -422,7 +422,7 @@ def write_report(
             "| 不同初始 SOC 的绝对端电压 | 低 |",
             "| 横向高速气动与机身阻力 | 低 |",
             "| 角速度带宽、相位裕度和惯量响应 | 低 |",
-            "| FAC/RLS、高速轨迹和失稳边界 | 低，不可用于实机等价验证 |",
+            "| FAC、高速轨迹和失稳边界 | 低，不可用于实机等价验证 |",
             "",
             "## 改进优先级",
             "",
@@ -436,7 +436,7 @@ def write_report(
             "5. 用实测初始开路电压/静置时间维护持久 SOC，并加入电流、内阻和温度；不要直接信任当前 "
             "`battery_status.remaining`。",
             "6. 完成上述动态建模后再回放同一轨迹；验收条件应至少是整圈不失稳、位置 RMSE 接近实机 "
-            "`0.17~0.19 m`，再恢复 FAC/RLS。",
+            "`0.17~0.19 m`，再恢复 FAC 验证。",
             "",
             "## 说明",
             "",

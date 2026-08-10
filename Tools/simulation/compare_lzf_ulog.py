@@ -176,6 +176,18 @@ def parse_jinja_list(text, variable):
     return np.fromstring(match.group(1), sep=" ", dtype=float)
 
 
+def parse_jinja_scalar(text, variable):
+    match = re.search(
+        rf"{{%\s*set\s+{re.escape(variable)}\s*=\s*([^%]+?)\s*%}}",
+        text,
+    )
+
+    if not match:
+        raise RuntimeError(f"missing Jinja scalar {variable}")
+
+    return float(match.group(1).strip().strip("\"'"))
+
+
 def parse_model(path, mass):
     text = path.read_text()
     rotor_positions_flu = []
@@ -250,6 +262,16 @@ def parse_model(path, mass):
         "motor_kv": float(parse_tag(text, "motorKv")),
         "motor_voltage_min_v": float(parse_tag(text, "motorSpeedVoltageMin")),
         "motor_voltage_max_v": float(parse_tag(text, "motorSpeedVoltageMax")),
+        "rotor_inertia_compensation_enabled": (
+            str(parse_tag(text, "rotorInertiaCompensationEnabled")).lower()
+            == "true"
+        ),
+        "rotor_axial_inertia_kg_m2": parse_jinja_scalar(
+            text, "lzf_rotor_axial_inertia"
+        ),
+        "rotor_velocity_slowdown_sim": float(
+            parse_tag(text, "rotorVelocitySlowdownSim")
+        ),
     }
 
 
@@ -1553,6 +1575,11 @@ def write_report(results, model, airframe, output):
             f"- Compensated base-link inertia: `{model['inertia_kg_m2']}`; "
             "the assembled target is `Ixx=0.003242418`, `Iyy=0.003092245`, "
             "`Izz=0.005802551 kg m^2`.",
+            f"- Rotor-inertia compensation: "
+            f"`{'enabled' if model['rotor_inertia_compensation_enabled'] else 'disabled'}`; "
+            f"per-rotor axial inertia "
+            f"`{model['rotor_axial_inertia_kg_m2']:.12g} kg m^2`; "
+            f"simulation slowdown `{model['rotor_velocity_slowdown_sim']:.6g}`.",
             "",
             "## Battery",
             "",
@@ -1829,17 +1856,19 @@ def write_report(results, model, airframe, output):
             "",
             "- Motor rise/fall time constants: command logging is about 10 Hz, while "
             "the measured rise/fall constant is 24.568 ms.",
-            "- The newly measured inertia and the rolling-moment coefficient still "
-            "lack a dedicated roll/pitch/yaw chirp or persistently exciting torque input.",
+            "- The real logs still lack a dedicated roll/pitch/yaw chirp or "
+            "persistently exciting torque input that can validate the assembled "
+            "inertia, rolling-moment coefficient, or rotor-inertia compensation.",
             "- True CT(J) in flight: no synchronized airspeed or wind measurement is "
             "available, and the UIUC data is at substantially lower RPM.",
             "- Electrical current, ESC efficiency, thermal state, cell imbalance, "
             "and motor torque loading are not represented.",
             "- Closed-loop trajectory tracking: this report does not replay the "
             "offboard attitude setpoints through SITL.",
-            "- The current `comet_ws` controller setup is not yet a valid replay "
-            "fixture: it launches Nokov/EKF odometry and its active YAML uses "
-            "`mass=1.5 kg` and a 4S battery, while LZF is 1.326 kg and 6S.",
+            "- The current `comet_ws` LZF profiles use the compatible 1.326 kg, "
+            "6S and external-EKF fixture. Its latest closed-loop trajectory and "
+            "long-hover acceptance results are reported separately from this "
+            "real-ULog component comparison.",
             "",
             "## Recommended Next Measurements",
             "",

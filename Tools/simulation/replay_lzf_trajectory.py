@@ -4,6 +4,7 @@
 
 import argparse
 import copy
+import math
 from pathlib import Path
 import sys
 from typing import Dict, List, Tuple
@@ -20,6 +21,37 @@ def parse_args():
     parser.add_argument("--topic", default="/setpoints_cmd")
     parser.add_argument("--odom-topic", default="/mavros/local_position/odom")
     parser.add_argument("--speed", type=float, default=1.0)
+    parser.add_argument(
+        "--position-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "scale the path about its first point; derivatives are scaled "
+            "consistently with both position-scale and --speed"
+        ),
+    )
+    parser.add_argument(
+        "--vertical-excitation-peak-acceleration",
+        type=float,
+        default=0.0,
+        metavar="M_S2",
+        help=(
+            "add a smooth asymmetric periodic z trajectory whose maximum "
+            "upward acceleration is M_S2; zero disables it"
+        ),
+    )
+    parser.add_argument(
+        "--vertical-excitation-frequency",
+        type=float,
+        default=0.6,
+        metavar="HZ",
+        help="frequency of the optional asymmetric z excitation",
+    )
+    parser.add_argument(
+        "--repeat",
+        action="store_true",
+        help="repeat the selected lap continuously in the same ROS process",
+    )
     parser.add_argument(
         "--no-align",
         action="store_true",
@@ -76,20 +108,6 @@ def controller_yaml(message) -> Dict[str, object]:
             "solver_type": message.thrust_model_solver_type,
             "acc_per_unit_throttle": message.thrust_model_acc_per_unit_throttle,
             "hover_percentage": message.thrust_model_hover_percentage,
-            "use_esc_k1_update": message.thrust_model_use_esc_k1_update,
-            "apply_esc_k1_update": message.thrust_model_apply_esc_k1_update,
-            "esc_k2": message.thrust_model_esc_k2,
-            "k1_rls_forgetting_factor": message.thrust_model_k1_rls_forgetting_factor,
-            "k1_rls_init_covariance": message.thrust_model_k1_rls_init_covariance,
-            "k1_min": message.thrust_model_k1_min,
-            "k1_max": message.thrust_model_k1_max,
-            "k1_min_delta_rpm": message.thrust_model_k1_min_delta_rpm,
-            "k1_response_window": message.thrust_model_k1_response_window,
-            "k1_delay_align": message.thrust_model_k1_delay_align,
-            "k1_require_response_same_sign": message.thrust_model_k1_require_response_same_sign,
-            "k1_instant_min": message.thrust_model_k1_instant_min,
-            "k1_instant_max": message.thrust_model_k1_instant_max,
-            "k1_min_delta_acc": message.thrust_model_k1_min_delta_acc,
         },
         "actuator_dyn": {
             "xy": {
@@ -162,6 +180,77 @@ def load_laps(bag, topic: str) -> List[List[Tuple[float, object]]]:
     return laps
 
 
+def vertical_excitation_derivative(
+    elapsed_s: float,
+    order: int,
+    peak_acceleration: float,
+    frequency_hz: float,
+) -> float:
+    """Return one derivative of a C-infinity asymmetric vertical excitation.
+
+    The acceleration is a normalized, zero-mean version of
+    ``(1 + cos(theta))**16``.  Its positive peak is about 6.15 times the
+    magnitude of its broad negative recovery segment.  Starting at
+    ``theta=pi`` makes position, velocity and every odd derivative continuous
+    with the unmodified trajectory.  The finite cosine series is integrated
+    analytically, so position through crackle remain mutually consistent.
+    """
+    if peak_acceleration <= 0.0:
+        return 0.0
+    if order < 0 or order > 5:
+        raise ValueError(f"unsupported vertical excitation derivative: {order}")
+
+    exponent = 16
+    omega = 2.0 * math.pi * frequency_hz
+    theta = math.pi + omega * elapsed_s
+    mean = math.comb(2 * exponent, exponent) / float(2**exponent)
+    positive_peak = float(2**exponent) - mean
+    harmonics = range(1, exponent + 1)
+    coefficients = [
+        math.comb(2 * exponent, exponent - harmonic)
+        / float(2 ** (exponent - 1))
+        for harmonic in harmonics
+    ]
+
+    if order == 0:
+        # Twice integrating acceleration.  Subtract the value at theta=pi so
+        # the excitation starts at zero position without changing derivatives.
+        series = sum(
+            coefficient
+            * (math.cos(harmonic * theta) - math.cos(harmonic * math.pi))
+            / float(harmonic * harmonic)
+            for harmonic, coefficient in zip(harmonics, coefficients)
+        )
+        return -peak_acceleration * series / (positive_peak * omega * omega)
+    if order == 1:
+        series = sum(
+            coefficient * math.sin(harmonic * theta) / float(harmonic)
+            for harmonic, coefficient in zip(harmonics, coefficients)
+        )
+        return peak_acceleration * series / (positive_peak * omega)
+
+    phase_order = order - 2
+    phase = phase_order % 4
+    total = 0.0
+    for harmonic, coefficient in zip(harmonics, coefficients):
+        angle = harmonic * theta
+        if phase == 0:
+            basis = math.cos(angle)
+        elif phase == 1:
+            basis = -math.sin(angle)
+        elif phase == 2:
+            basis = -math.cos(angle)
+        else:
+            basis = math.sin(angle)
+        total += coefficient * harmonic**phase_order * basis
+    return (
+        peak_acceleration
+        * omega**phase_order
+        * total
+        / positive_peak
+    )
+
+
 def main() -> int:
     args = parse_args()
 
@@ -217,6 +306,28 @@ def main() -> int:
     if args.speed <= 0.0:
         print("error: --speed must be positive", file=sys.stderr)
         return 2
+    if args.position_scale <= 0.0:
+        print("error: --position-scale must be positive", file=sys.stderr)
+        return 2
+    if (
+        not math.isfinite(args.vertical_excitation_peak_acceleration)
+        or args.vertical_excitation_peak_acceleration < 0.0
+    ):
+        print(
+            "error: --vertical-excitation-peak-acceleration must be finite "
+            "and non-negative",
+            file=sys.stderr,
+        )
+        return 2
+    if (
+        not math.isfinite(args.vertical_excitation_frequency)
+        or args.vertical_excitation_frequency <= 0.0
+    ):
+        print(
+            "error: --vertical-excitation-frequency must be finite and positive",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         import rospy
@@ -231,6 +342,7 @@ def main() -> int:
         return 2
 
     selected = laps[args.lap - 1]
+    source_origin = copy.deepcopy(selected[0][1].position)
     rospy.init_node("replay_lzf_trajectory", anonymous=True)
     publisher = rospy.Publisher(args.topic, PositionCommand, queue_size=20)
     offset = [0.0, 0.0, 0.0]
@@ -250,40 +362,97 @@ def main() -> int:
         rospy.sleep(0.05)
 
     source_start = selected[0][0]
-    wall_start = rospy.Time.now()
-    print(
-        f"replaying lap {args.lap}/{len(laps)}: {len(selected)} samples, "
-        f"{selected[-1][0] - source_start:.3f} s, offset={offset}"
-    )
+    replay_count = 0
 
-    for source_time, original in selected:
-        target_elapsed = (source_time - source_start) / args.speed
+    while not rospy.is_shutdown():
+        replay_count += 1
+        wall_start = rospy.Time.now()
+        print(
+            f"replaying lap {args.lap}/{len(laps)} iteration {replay_count}: "
+            f"{len(selected)} samples, "
+            f"{selected[-1][0] - source_start:.3f} s, offset={offset}",
+            flush=True,
+        )
 
-        while not rospy.is_shutdown():
-            remaining = target_elapsed - (rospy.Time.now() - wall_start).to_sec()
+        for source_time, original in selected:
+            target_elapsed = (source_time - source_start) / args.speed
 
-            if remaining <= 0.0:
-                break
+            while not rospy.is_shutdown():
+                remaining = target_elapsed - (rospy.Time.now() - wall_start).to_sec()
 
-            rospy.sleep(min(remaining, 0.002))
+                if remaining <= 0.0:
+                    break
 
-        if rospy.is_shutdown():
-            return 1
+                rospy.sleep(min(remaining, 0.002))
 
-        # rosbag can materialize a dynamic Python class when the recorded
-        # PositionCommand MD5 differs from the currently sourced message.
-        # Publishing that object directly makes rospy treat it as the first
-        # field (Header) and fail before serialization. Rebuild the command
-        # with the current class while preserving every common field.
-        message = PositionCommand()
-        for field in message.__slots__:
-            if hasattr(original, field):
-                setattr(message, field, copy.deepcopy(getattr(original, field)))
-        message.header.stamp = rospy.Time.now()
-        message.position.x += offset[0]
-        message.position.y += offset[1]
-        message.position.z += offset[2]
-        publisher.publish(message)
+            if rospy.is_shutdown():
+                return 1
+
+            # rosbag can materialize a dynamic Python class when the recorded
+            # PositionCommand MD5 differs from the currently sourced message.
+            # Publishing that object directly makes rospy treat it as the first
+            # field (Header) and fail before serialization. Rebuild the command
+            # with the current class while preserving every common field.
+            message = PositionCommand()
+            for field in message.__slots__:
+                if hasattr(original, field):
+                    setattr(message, field, copy.deepcopy(getattr(original, field)))
+            message.header.stamp = rospy.Time.now()
+            message.position.x = (
+                source_origin.x
+                + args.position_scale * (message.position.x - source_origin.x)
+                + offset[0]
+            )
+            message.position.y = (
+                source_origin.y
+                + args.position_scale * (message.position.y - source_origin.y)
+                + offset[1]
+            )
+            message.position.z = (
+                source_origin.z
+                + args.position_scale * (message.position.z - source_origin.z)
+                + offset[2]
+            )
+
+            # A polynomial trajectory transformed as p'(t)=s*p(q*t) has its
+            # n-th spatial derivative multiplied by s*q**n.  Scaling publish
+            # timestamps alone would make the commanded position inconsistent
+            # with velocity/acceleration and invalidate controller validation.
+            derivative_fields = (
+                ("velocity", 1),
+                ("acceleration", 2),
+                ("jerk", 3),
+                ("snap", 4),
+                ("crackle", 5),
+            )
+            for field, order in derivative_fields:
+                vector = getattr(message, field, None)
+                if vector is None:
+                    continue
+                scale = args.position_scale * args.speed ** order
+                vector.x *= scale
+                vector.y *= scale
+                vector.z *= scale
+            excitation_arguments = (
+                target_elapsed,
+                args.vertical_excitation_peak_acceleration,
+                args.vertical_excitation_frequency,
+            )
+            message.position.z += vertical_excitation_derivative(
+                excitation_arguments[0], 0, *excitation_arguments[1:]
+            )
+            for field, order in derivative_fields:
+                vector = getattr(message, field, None)
+                if vector is not None:
+                    vector.z += vertical_excitation_derivative(
+                        excitation_arguments[0], order, *excitation_arguments[1:]
+                    )
+            message.yaw_dot *= args.speed
+            message.yaw_ddot *= args.speed * args.speed
+            publisher.publish(message)
+
+        if not args.repeat:
+            break
 
     print("trajectory replay complete")
     return 0
